@@ -1,0 +1,7 @@
+{
+    "python.testing.pytestArgs": [
+        "antonrx_backend"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
+}

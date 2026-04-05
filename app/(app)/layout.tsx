@@ -18,4 +18,4 @@ export default function AppLayout({
       </main>
     </div>
   );
-}
+}export const dynamic = 'force-dynamic'

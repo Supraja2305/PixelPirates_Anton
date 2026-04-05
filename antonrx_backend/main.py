@@ -17,7 +17,8 @@ from datetime import datetime
 import logging
 from contextlib import asynccontextmanager
 from uuid import uuid4
-from fastapi import FastAPI, Request, HTTPException
+from pathlib import Path
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import Optional, List
@@ -697,6 +698,109 @@ async def get_payer_drugs(payer_id: str):
 
 
 # ════════════════════════════════════════════════════════════════
+# SPEECH-TO-TEXT ENDPOINTS - Quick access endpoints
+# ════════════════════════════════════════════════════════════════
+
+@app.post("/transcribe/quick", tags=["Speech-to-Text"])
+async def quick_transcribe(
+    context: str = "policy discussion",
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    file: UploadFile = File(...),
+):
+    """
+    Quick speech-to-text transcription endpoint.
+    
+    Supports: MP3, WAV, M4A, WEBM, OGG, FLAC (max 25MB)
+    
+    Args:
+        file: Audio file to transcribe
+        context: Context for the audio (default: "policy discussion")
+        
+    Returns:
+        Transcription result with confidence score
+    """
+    from antonrx_backend.extractors.speech_to_text_service import speech_to_text_service
+    
+    try:
+        # Read and validate file
+        audio_data = await file.read()
+        if len(audio_data) == 0:
+            raise HTTPException(status_code=400, detail="Empty file")
+        
+        file_ext = Path(file.filename or "").suffix.lstrip(".").lower()
+        if file_ext not in speech_to_text_service.supported_formats:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported format: {file_ext}. Supported: {', '.join(speech_to_text_service.supported_formats)}"
+            )
+        
+        # Transcribe
+        transcription, confidence, file_hash = await speech_to_text_service.transcribe_audio(
+            audio_data=audio_data,
+            file_name=file.filename or "audio",
+            context=context,
+        )
+        
+        logger.info(f"Quick transcription completed: {len(transcription.get('full_text', ''))} chars")
+        
+        return {
+            "success": True,
+            "file_name": file.filename,
+            "context": context,
+            "transcription": transcription,
+            "confidence": confidence,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in quick transcription: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/transcription-demo", tags=["Speech-to-Text"])
+async def transcription_demo():
+    """
+    Demo endpoint showing speech-to-text capabilities.
+    
+    Returns:
+        Example transcription result and usage information
+    """
+    return {
+        "success": True,
+        "message": "Speech-to-Text service demo",
+        "capabilities": {
+            "formats": ["mp3", "wav", "m4a", "webm", "ogg", "flac"],
+            "max_file_size_mb": 25,
+            "features": [
+                "Audio transcription with high accuracy",
+                "Medical terminology recognition",
+                "Policy keyword extraction",
+                "Confidence scoring",
+                "Async webhooks for batch processing",
+                "Caching for repeated files"
+            ]
+        },
+        "example_result": {
+            "full_text": "This is a coverage discussion about prior authorization requirements for specialty drugs.",
+            "medical_terms": ["prior authorization", "specialty drugs"],
+            "policy_keywords": ["coverage", "authorization", "requirement"],
+            "confidence_assessment": "high",
+            "confidence_score": 87.5
+        },
+        "endpoints": {
+            "sync_transcribe": "POST /transcribe/quick (single file)",
+            "async_transcribe": "POST /speech-to-text/upload (with webhook)",
+            "batch_transcribe": "POST /speech-to-text/batch (multiple files)",
+            "check_job_status": "GET /speech-to-text/status/{job_id}",
+            "cache_stats": "GET /speech-to-text/cache-stats",
+            "webhook_register": "POST /speech-to-text/webhook/register"
+        }
+    }
+
+
+# ════════════════════════════════════════════════════════════════
 # API ROUTES
 # ════════════════════════════════════════════════════════════════
 
@@ -717,6 +821,18 @@ try:
     logger.info("✓ Admin routes loaded (50+ endpoints)")
 except Exception as e:
     logger.warning(f"⚠ Admin routes not available: {e}")
+
+
+# ════════════════════════════════════════════════════════════════
+# SPEECH-TO-TEXT ROUTES - Audio transcription with webhooks
+# ════════════════════════════════════════════════════════════════
+
+try:
+    from .api import speech_to_text_routes
+    app.include_router(speech_to_text_routes.router, prefix="/api", tags=["Speech-to-Text"])
+    logger.info("✓ Speech-to-Text routes loaded (audio transcription + webhooks)")
+except Exception as e:
+    logger.warning(f"⚠ Speech-to-Text routes not available: {e}")
 
 
 # ════════════════════════════════════════════════════════════════

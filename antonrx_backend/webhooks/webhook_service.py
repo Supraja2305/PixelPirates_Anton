@@ -360,6 +360,62 @@ class WebhookService:
 
         return "medium"
 
+    async def deliver_webhook_event(self, webhook_url: str, payload: Dict) -> Dict:
+        """
+        Direct webhook delivery to a specific URL (not event-based).
+        
+        Args:
+            webhook_url: Target webhook URL
+            payload: Payload to send
+            
+        Returns:
+            Delivery result
+        """
+        try:
+            # POST to webhook
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                timeout=10,
+                headers={"Content-Type": "application/json"},
+            )
+
+            if response.status_code < 300:
+                logger.info(
+                    f"Direct webhook delivery successful: {webhook_url} ({response.status_code})"
+                )
+                return {
+                    "success": True,
+                    "status_code": response.status_code,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            else:
+                logger.warning(
+                    f"Direct webhook delivery failed: {webhook_url} (status={response.status_code})"
+                )
+                return {
+                    "success": False,
+                    "status_code": response.status_code,
+                    "error": response.text[:200],
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+
+        except requests.exceptions.Timeout:
+            logger.error(f"Direct webhook timeout: {webhook_url}")
+            return {
+                "success": False,
+                "error": "timeout",
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Direct webhook delivery error: {webhook_url}: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)[:200],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
 
 # Singleton instance
 webhook_service = WebhookService()

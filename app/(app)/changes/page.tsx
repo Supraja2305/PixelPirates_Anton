@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { ArrowLeft, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -80,7 +80,7 @@ function EmptyState({ onSearch }: { onSearch: (q: string) => void }) {
   );
 }
 
-export default function ChangesPage() {
+function ChangesPageInner() {
   const params    = useSearchParams();
   const router    = useRouter();
   const drugParam = params.get('drug');
@@ -145,5 +145,13 @@ export default function ChangesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function ChangesPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-[60vh]"><div className="w-6 h-6 rounded-full border-2 border-accent-blue border-t-transparent animate-spin" /></div>}>
+      <ChangesPageInner />
+    </Suspense>
   );
 }

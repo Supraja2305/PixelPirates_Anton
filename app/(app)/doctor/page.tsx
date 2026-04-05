@@ -6,7 +6,7 @@
  */
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Stethoscope, CheckCircle2, AlertCircle, XCircle, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -142,7 +142,7 @@ function EmptyState({ onSearch }: { onSearch: (q: string) => void }) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function DoctorPage() {
+function DoctorPageInner() {
   const params    = useSearchParams();
   const router    = useRouter();
   const drugParam = params.get('drug');
@@ -232,5 +232,13 @@ export default function DoctorPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function DoctorPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-[60vh]"><div className="w-6 h-6 rounded-full border-2 border-accent-blue border-t-transparent animate-spin" /></div>}>
+      <DoctorPageInner />
+    </Suspense>
   );
 }

@@ -522,18 +522,40 @@ async def get_doctor(doctor_id: str):
 
 @app.post("/doctors/login", tags=["Doctor"])
 async def doctor_login(request: LoginRequest):
-    """Doctor login endpoint."""
+    """
+    Doctor login endpoint with secure token management.
+    
+    Returns a one-time-viewable token that is then hashed for storage.
+    Token can be verified later using the token_id + token pair.
+    """
+    from antonrx_backend.auth.token_manager import token_manager
+    
     doctor = next((u for u in USERS_DATA if u.get("email") == request.email and u.get("role") == "doctor"), None)
     if not doctor:
         raise HTTPException(status_code=401, detail="Doctor not found or invalid credentials")
     
-    return {
-        "message": "Login successful",
-        "doctor_id": doctor["id"],
-        "name": doctor["name"],
-        "specialization": doctor.get("specialization"),
-        "token": "demo-jwt-token"
-    }
+    try:
+        # Generate token with secure hashing
+        token_id, plain_token, reveal_response = token_manager.create_and_reveal_token(
+            user_id=doctor["id"],
+            user_type="doctor",
+            expiry_hours=24,
+        )
+        
+        logger.info(f"Doctor login successful: {doctor['id']}")
+        
+        return {
+            "success": True,
+            "message": "Login successful",
+            "doctor_id": doctor["id"],
+            "name": doctor["name"],
+            "specialization": doctor.get("specialization"),
+            **reveal_response,  # Includes: token, token_id, expires_in_hours, reveal_status, note
+        }
+    
+    except Exception as e:
+        logger.error(f"Error during doctor login: {str(e)}")
+        raise HTTPException(status_code=500, detail="Login error")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -542,18 +564,203 @@ async def doctor_login(request: LoginRequest):
 
 @app.post("/admin/login", tags=["Admin"])
 async def admin_login(request: LoginRequest):
-    """Admin login endpoint."""
+    """
+    Admin login endpoint with secure token management.
+    
+    Returns a one-time-viewable token that is then hashed for storage.
+    Token can be verified later using the token_id + token pair.
+    """
+    from antonrx_backend.auth.token_manager import token_manager
+    
     admin = next((u for u in USERS_DATA if u.get("email") == request.email and u.get("role") == "admin"), None)
     if not admin:
         raise HTTPException(status_code=401, detail="Admin not found or invalid credentials")
     
-    return {
-        "message": "Login successful",
-        "admin_id": admin["id"],
-        "name": admin["name"],
-        "role": "admin",
-        "token": "demo-jwt-token"
-    }
+    try:
+        # Generate token with secure hashing
+        token_id, plain_token, reveal_response = token_manager.create_and_reveal_token(
+            user_id=admin["id"],
+            user_type="admin",
+            expiry_hours=24,
+        )
+        
+        logger.info(f"Admin login successful: {admin['id']}")
+        
+        return {
+            "success": True,
+            "message": "Login successful",
+            "admin_id": admin["id"],
+            "name": admin["name"],
+            "role": "admin",
+            **reveal_response,  # Includes: token, token_id, expires_in_hours, reveal_status, note
+        }
+    
+    except Exception as e:
+        logger.error(f"Error during admin login: {str(e)}")
+        raise HTTPException(status_code=500, detail="Login error")
+
+
+# ════════════════════════════════════════════════════════════════
+# TOKEN MANAGEMENT ENDPOINTS - Secure token verification & revocation
+# ════════════════════════════════════════════════════════════════
+
+@app.post("/tokens/verify", tags=["Token Management"])
+async def verify_token_endpoint(token_id: str, token: str):
+    """
+    Verify a token against its stored hash.
+    
+    Use this endpoint when:
+    - Authorizing API requests
+    - Validating token in middleware
+    - Client needs to prove token ownership
+    
+    Args:
+        token_id: ID of the token (from login response)
+        token: The plain token string (from login response)
+        
+    Returns:
+        Validation result with user info if valid
+    """
+    from antonrx_backend.auth.token_manager import token_manager
+    
+    try:
+        is_valid, metadata = token_manager.verify_token(token_id, token)
+        
+        if is_valid:
+            logger.info(f"Token verified successfully: {token_id}")
+            return {
+                "success": True,
+                "message": "Token is valid",
+                "user_id": metadata["user_id"],
+                "user_type": metadata["user_type"],
+                "expires_at": metadata["expires_at"],
+                "verification_count": metadata["verification_count"],
+                "token_id": token_id,
+            }
+        else:
+            logger.warning(f"Token verification failed: {token_id} - {metadata.get('error')}")
+            raise HTTPException(
+                status_code=401,
+                detail=metadata.get("error", "Invalid token")
+            )
+    
+    except Exception as e:
+        logger.error(f"Error verifying token: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/tokens/{token_id}/info", tags=["Token Management"])
+async def get_token_info(token_id: str):
+    """
+    Get information about a token (without revealing the plain token).
+    
+    Safe endpoint - returns only metadata, no sensitive token data.
+    
+    Returns:
+        Token metadata including:
+        - Creation and expiry times
+        - Verification history
+        - Lock/revocation status
+    """
+    from antonrx_backend.auth.token_manager import token_manager
+    
+    try:
+        info = token_manager.get_token_info(token_id)
+        
+        if "error" in info:
+            raise HTTPException(status_code=404, detail=info["error"])
+        
+        return {
+            "success": True,
+            **info,
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting token info: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/tokens/{token_id}/revoke", tags=["Token Management"])
+async def revoke_token_endpoint(token_id: str):
+    """
+    Revoke/invalidate a token immediately.
+    
+    Use for:
+    - Logout
+    - Compromised token
+    - Admin removal of access
+    
+    Returns:
+        Confirmation of revocation
+    """
+    from antonrx_backend.auth.token_manager import token_manager
+    
+    try:
+        result = token_manager.revoke_token(token_id)
+        
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
+        
+        logger.info(f"Token revoked: {token_id}")
+        
+        return {
+            "success": True,
+            "message": "Token revoked successfully",
+            **result,
+        }
+    
+    except Exception as e:
+        logger.error(f"Error revoking token: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/tokens/user/{user_id}", tags=["Token Management"])
+async def get_user_tokens(user_id: str):
+    """
+    Get all tokens for a user (admin only in production).
+    
+    Returns:
+        List of all tokens for the user with status info
+    """
+    from antonrx_backend.auth.token_manager import token_manager
+    
+    try:
+        result = token_manager.get_user_tokens(user_id)
+        return {
+            "success": True,
+            **result,
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting user tokens: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/tokens/stats", tags=["Token Management"])
+async def get_token_statistics():
+    """
+    Get token manager statistics (admin only in production).
+    
+    Returns:
+        Statistics including:
+        - Total tokens
+        - Active/expired/revoked/locked counts
+    """
+    from antonrx_backend.auth.token_manager import token_manager
+    
+    try:
+        stats = token_manager.get_stats()
+        clean_result = token_manager.cleanup_expired_tokens()
+        
+        return {
+            "success": True,
+            "stats": stats,
+            "cleanup_result": clean_result,
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting token statistics: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ════════════════════════════════════════════════════════════════

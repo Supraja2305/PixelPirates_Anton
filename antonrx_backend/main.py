@@ -556,6 +556,115 @@ async def admin_login(request: LoginRequest):
 
 
 # ════════════════════════════════════════════════════════════════
+# POLICY COMPARISON ENDPOINTS - Compare policies side by side
+# ════════════════════════════════════════════════════════════════
+
+@app.post("/compare/policies", tags=["Comparison"])
+async def compare_two_policies(policy_1_id: str, policy_2_id: str):
+    """
+    Compare two policies side-by-side.
+    Returns differences, similarities, and scoring.
+    """
+    from antonrx_backend.api.compare import comparison_service
+    
+    policy_1 = next((p for p in POLICIES_DATA if p["id"] == policy_1_id), None)
+    policy_2 = next((p for p in POLICIES_DATA if p["id"] == policy_2_id), None)
+    
+    if not policy_1 or not policy_2:
+        raise HTTPException(status_code=404, detail="One or both policies not found")
+    
+    try:
+        result = comparison_service.compare_policies(policy_1, policy_2)
+        return {
+            "success": True,
+            "data": result,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error comparing policies: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/compare/policies/{policy_id}/similar", tags=["Comparison"])
+async def find_similar_policies(policy_id: str, limit: int = 5):
+    """
+    Find similar policies to a given policy.
+    Returns top N most similar policies with similarity scores.
+    """
+    from antonrx_backend.search.vector_store import vector_store
+    
+    policy = next((p for p in POLICIES_DATA if p["id"] == policy_id), None)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    
+    # Create simple embedding-like search
+    similar_policies = []
+    for other_policy in POLICIES_DATA:
+        if other_policy["id"] != policy_id:
+            # Compare coverage rules similarity
+            coverage_sim = len(set(policy.get("coverage_rules", {}).keys()) & 
+                              set(other_policy.get("coverage_rules", {}).keys())) / \
+                          max(len(set(policy.get("coverage_rules", {}).keys()) | 
+                               set(other_policy.get("coverage_rules", {}).keys())), 1)
+            
+            similar_policies.append({
+                "policy_id": other_policy["id"],
+                "policy_name": other_policy["name"],
+                "payer_id": other_policy["payer_id"],
+                "similarity_score": coverage_sim,
+                "coverage_rules": other_policy["coverage_rules"]
+            })
+    
+    # Sort by similarity and limit
+    similar_policies.sort(key=lambda x: x["similarity_score"], reverse=True)
+    
+    return {
+        "source_policy_id": policy_id,
+        "similar_policies": similar_policies[:limit],
+        "count": len(similar_policies[:limit])
+    }
+
+
+@app.get("/compare/drug/{drug_name}/across-payers", tags=["Comparison"])
+async def compare_drug_across_payers(drug_name: str):
+    """
+    Compare how a single drug is covered across all payers.
+    Shows restrictiveness, costs, and requirements side-by-side.
+    """
+    from antonrx_backend.scoring.scoring_engine import scoring_engine
+    
+    if drug_name.lower() not in DRUG_COVERAGE_MAP:
+        raise HTTPException(status_code=404, detail=f"Drug {drug_name} not found")
+    
+    drug_info = DRUG_COVERAGE_MAP[drug_name.lower()]
+    
+    comparison_data = {
+        "drug": drug_name,
+        "drug_class": drug_info["drug_class"],
+        "condition": drug_info["condition"],
+        "generic_available": drug_info["generic_available"],
+        "payer_comparison": []
+    }
+    
+    for payer_info in drug_info["payers"]:
+        payer = next((p for p in PAYERS_DATA if p["name"] == payer_info["name"]), None)
+        policy = next((p for p in POLICIES_DATA if p["payer_id"] == payer["id"]), None) if payer else None
+        
+        comparison_data["payer_comparison"].append({
+            "payer_name": payer_info["name"],
+            "status": payer_info["status"],
+            "requires_prior_auth": payer_info["auth_required"],
+            "copay": drug_info["avg_copay"],
+            "coverage_rules": policy.get("coverage_rules", {}) if policy else {}
+        })
+    
+    # Sort by copay
+    comparison_data["payer_comparison"].sort(key=lambda x: x.get("copay", 999))
+    
+    return comparison_data
+
+
+# ════════════════════════════════════════════════════════════════
 # DRUG COVERAGE ENDPOINTS
 # ════════════════════════════════════════════════════════════════
 
@@ -597,6 +706,17 @@ try:
     logger.info("✓ API routes loaded")
 except Exception as e:
     logger.warning(f"⚠ API routes not available: {e}")
+
+# ════════════════════════════════════════════════════════════════
+# ADMIN ROUTES - All admin features, analytics, webhooks
+# ════════════════════════════════════════════════════════════════
+
+try:
+    from .api import admin_routes
+    app.include_router(admin_routes.router, prefix="/api/admin", tags=["Admin"])
+    logger.info("✓ Admin routes loaded (50+ endpoints)")
+except Exception as e:
+    logger.warning(f"⚠ Admin routes not available: {e}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -725,6 +845,331 @@ async def get_coverage_map_data():
         "coverage_map": coverage_map,
         "total_drugs": len(coverage_map),
     }
+
+
+# ════════════════════════════════════════════════════════════════
+# BONUS FEATURES - Scoring, Alerts, Extraction, Search
+# ════════════════════════════════════════════════════════════════
+
+@app.post("/policies/score", tags=["Scoring"])
+async def score_policy(policy_id: str):
+    """
+    Score a policy on a 0-100 scale using weighted criteria:
+    - Coverage breadth (35%)
+    - Pricing competitiveness (25%)
+    - Requirements simplicity (20%)
+    - Recency (15%)
+    - Relevance (5%)
+    """
+    from antonrx_backend.scoring.scoring_engine import scoring_engine
+    
+    policy = next((p for p in POLICIES_DATA if p["id"] == policy_id), None)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    
+    try:
+        score, breakdown = scoring_engine.score_policy(policy)
+        return {
+            "success": True,
+            "policy_id": policy_id,
+            "policy_name": policy["name"],
+            "score": score,
+            "score_breakdown": breakdown,
+            "rating": "Excellent" if score >= 80 else "Good" if score >= 60 else "Fair" if score >= 40 else "Poor",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error scoring policy: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/policies/rank", tags=["Scoring"])
+async def rank_policies():
+    """
+    Rank all policies by score (0-100) with breakdown of each criterion.
+    """
+    from antonrx_backend.scoring.scoring_engine import scoring_engine
+    
+    try:
+        rankings = []
+        for policy in POLICIES_DATA:
+            score, breakdown = scoring_engine.score_policy(policy)
+            rankings.append({
+                "rank": 0,  # Will be assigned
+                "policy_id": policy["id"],
+                "policy_name": policy["name"],
+                "payer_name": next((p["name"] for p in PAYERS_DATA if p["id"] == policy["payer_id"]), "Unknown"),
+                "score": score,
+                "breakdown": breakdown
+            })
+        
+        # Sort by score descending
+        rankings.sort(key=lambda x: x["score"], reverse=True)
+        
+        # Assign ranks
+        for idx, ranking in enumerate(rankings, 1):
+            ranking["rank"] = idx
+        
+        return {
+            "success": True,
+            "total_policies": len(rankings),
+            "rankings": rankings,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error ranking policies: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/extract/document", tags=["Extraction"])
+async def extract_document_policy(document_text: str):
+    """
+    Extract policy information from document text using Claude AI.
+    Returns extracted policy data with confidence score.
+    
+    - Documents with confidence < 70 are flagged for human review
+    - Automatic duplicate detection to save API costs
+    """
+    from antonrx_backend.extractors.enhanced_extractor import enhanced_extractor
+    
+    try:
+        extracted_data, confidence, checksum = enhanced_extractor.extract_policy_from_document(
+            document_text=document_text,
+            document_id=f"doc_{uuid4()}",
+            force_reextract=False
+        )
+        
+        return {
+            "success": True,
+            "extracted_data": extracted_data,
+            "confidence_score": confidence,
+            "requires_human_review": confidence < 70,
+            "checksum": checksum,
+            "status": "auto_approved" if confidence >= 70 else "pending_review",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error extracting document: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/alerts/create", tags=["Alerts"])
+async def create_alert(policy_id: str, alert_type: str, message: str):
+    """
+    Create an alert for policy changes.
+    
+    Alert types:
+    - POLICY_CHANGE: Policy details changed
+    - NEW_COVERAGE: New drugs added
+    - COVERAGE_REMOVED: Drugs removed
+    - PRICE_UPDATE: Copay/cost changed
+    - REQUIREMENT_CHANGE: Prior auth/step therapy changed
+    - POLICY_EXPIRING: Policy expiration warning
+    - NEW_POLICY: New policy created
+    """
+    from antonrx_backend.alerts.alert_service import alert_service
+    
+    policy = next((p for p in POLICIES_DATA if p["id"] == policy_id), None)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    
+    try:
+        alert = alert_service.create_alert(
+            policy_id=policy_id,
+            alert_type=alert_type,
+            message=message,
+            severity="high"
+        )
+        
+        return {
+            "success": True,
+            "alert_id": alert.get("id"),
+            "policy_id": policy_id,
+            "alert_type": alert_type,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error creating alert: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/alerts", tags=["Alerts"])
+async def get_all_alerts(unresolved_only: bool = False):
+    """Get all system alerts with optional filtering for unresolved only."""
+    from antonrx_backend.alerts.alert_service import alert_service
+    
+    try:
+        alerts = alert_service.get_alerts(limit=100)
+        
+        if unresolved_only:
+            alerts = [a for a in alerts if not a.get("resolved", False)]
+        
+        return {
+            "success": True,
+            "total_alerts": len(alerts),
+            "alerts": alerts,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving alerts: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/search/semantic", tags=["Search"])
+async def semantic_search(query: str, limit: int = 10):
+    """
+    Semantic search across policies using embeddings.
+    Finds policies matching the query both keyword-wise and semantically.
+    """
+    from antonrx_backend.search.embedding_service import embedding_service
+    from antonrx_backend.search.vector_store import vector_store
+    
+    try:
+        # Generate query embedding
+        query_embedding = embedding_service.generate_search_query_embedding(query)
+        
+        # Search in vector store
+        results = vector_store.search(query_embedding, top_k=limit)
+        
+        search_results = []
+        for record, similarity in results:
+            policy = next((p for p in POLICIES_DATA if p["id"] == record.item_id), None)
+            if policy:
+                search_results.append({
+                    "policy_id": policy["id"],
+                    "policy_name": policy["name"],
+                    "payer_name": next((p["name"] for p in PAYERS_DATA if p["id"] == policy["payer_id"]), "Unknown"),
+                    "similarity_score": similarity,
+                    "coverage_rules": policy["coverage_rules"]
+                })
+        
+        return {
+            "success": True,
+            "query": query,
+            "results": search_results,
+            "count": len(search_results),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error in semantic search: {str(e)}")
+        # Fallback to simple keyword search
+        keyword_results = []
+        query_lower = query.lower()
+        for policy in POLICIES_DATA:
+            if query_lower in policy["name"].lower() or query_lower in policy.get("description", "").lower():
+                payer = next((p for p in PAYERS_DATA if p["id"] == policy["payer_id"]), {})
+                keyword_results.append({
+                    "policy_id": policy["id"],
+                    "policy_name": policy["name"],
+                    "payer_name": payer.get("name", "Unknown"),
+                    "similarity_score": 0.8,  # Keyword match
+                    "coverage_rules": policy["coverage_rules"]
+                })
+        
+        return {
+            "success": True,
+            "query": query,
+            "results": keyword_results,
+            "count": len(keyword_results),
+            "search_type": "keyword_fallback",
+            "timestamp": datetime.now().isoformat()
+        }
+
+
+@app.get("/search/by-criteria", tags=["Search"])
+async def search_by_criteria(
+    drug: str = None,
+    payer: str = None,
+    min_score: float = None,
+    max_copay: float = None
+):
+    """
+    Advanced search with multiple filter criteria:
+    - drug: Filter by drug name
+    - payer: Filter by payer name
+    - min_score: Minimum policy score (0-100)
+    - max_copay: Maximum copay amount
+    """
+    from antonrx_backend.search.enhanced_search_service import enhanced_search_service
+    
+    try:
+        results = enhanced_search_service.search_policies(
+            drug=drug,
+            payer=payer,
+            max_restrictiveness_score=100 - (min_score or 0),
+            max_copay=max_copay,
+            limit=50
+        )
+        
+        return {
+            "success": True,
+            "filters": {
+                "drug": drug,
+                "payer": payer,
+                "min_score": min_score,
+                "max_copay": max_copay
+            },
+            "results": results,
+            "count": len(results),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error in criteria search: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/analytics/dashboard", tags=["Analytics"])
+async def analytics_dashboard():
+    """
+    Comprehensive analytics dashboard showing:
+    - System statistics
+    - Policy performance metrics
+    - Coverage gaps
+    - Top restrictive payers
+    """
+    from antonrx_backend.analytics.analytics_service import analytics_service
+    
+    try:
+        stats = analytics_service.get_policy_statistics()
+        payer_rankings = analytics_service.get_payer_restrictiveness_ranking(limit=5)
+        
+        return {
+            "success": True,
+            "statistics": stats,
+            "top_restrictive_payers": payer_rankings,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error generating analytics: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/report/quarterly", tags=["Reports"])
+async def quarterly_report(year: int, quarter: int):
+    """
+    Generate detailed quarterly report with:
+    - Policy changes and trends
+    - Coverage gap analysis
+    - Outlier policies
+    - Payer performance metrics
+    """
+    from antonrx_backend.analytics.analytics_service import analytics_service
+    
+    if quarter < 1 or quarter > 4:
+        raise HTTPException(status_code=400, detail="Quarter must be 1-4")
+    
+    try:
+        report = analytics_service.generate_quarterly_report(year, quarter)
+        
+        return {
+            "success": True,
+            "report": report,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error generating report: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 # Health & Status Endpoints
 # ════════════════════════════════════════════════════════════════

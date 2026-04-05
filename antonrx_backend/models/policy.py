@@ -119,10 +119,21 @@ class Policy(BaseModel):
 
 # ── Request / Input Models ────────────────────────────────────
 
+class CreatePolicyRequest(BaseModel):
+    """Request to create a new policy."""
+    payer_name: str = Field(..., description="Health plan name")
+    payer_id: str = Field(..., description="Payer identifier")
+    drug_name: str = Field(..., description="Drug name or generic name")
+    coverage_status: CoverageStatus = Field(default=CoverageStatus.UNKNOWN)
+    description: Optional[str] = None
+    effective_date: Optional[str] = None
+    coverage_rules: dict = Field(default_factory=dict)
+
+
 class IngestRequest(BaseModel):
     """Metadata sent alongside a file upload."""
     payer_name: str
-    payer_id: str
+    payer_id: str = Field(..., description="Payer slug")
     source_url: Optional[str] = None
 
 

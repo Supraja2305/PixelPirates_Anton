@@ -20,7 +20,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .utils.error_handler import AntonRXException, ErrorHandler
@@ -32,11 +32,19 @@ settings = get_settings()
 # Data Models for API
 # ════════════════════════════════════════════════════════════════
 
+class UserCreateRequest(BaseModel):
+    """Request to create a new user."""
+    email: str
+    name: str
+    role: str = "user"
+    specialization: Optional[str] = None
+
 class User(BaseModel):
+    """Response model for user."""
     id: str
     email: str
     name: str
-    role: str  # admin, doctor, user
+    role: str
     specialization: Optional[str] = None
 
 class Admin(BaseModel):
@@ -45,26 +53,50 @@ class Admin(BaseModel):
     name: str
     permissions: List[str]
 
+class PolicyCreateRequest(BaseModel):
+    """Request to create a new policy."""
+    payer_id: str = Field(..., description="Payer ID")
+    name: str = Field(..., description="Policy name")
+    description: str = Field(default="", description="Policy description")
+    effective_date: str = Field(default="", description="Effective date")
+    coverage_rules: dict = Field(default_factory=dict)
+
 class Policy(BaseModel):
+    """Response model for policy."""
     id: str
     payer_id: str
     name: str
-    description: str
-    effective_date: str
-    coverage_rules: dict
+    description: str = ""
+    effective_date: str = ""
+    coverage_rules: dict = Field(default_factory=dict)
+
+class DrugCreateRequest(BaseModel):
+    """Request to create a new drug."""
+    name: str = Field(..., description="Drug name")
+    drug_class: str = Field(default="", description="Drug class")
+    condition: str = Field(default="", description="Condition")
+    generic_available: bool = Field(default=False)
 
 class Drug(BaseModel):
+    """Response model for drug."""
     id: str
     name: str
-    drug_class: str
-    condition: str
-    generic_available: bool
+    drug_class: str = ""
+    condition: str = ""
+    generic_available: bool = False
+
+class PayerCreateRequest(BaseModel):
+    """Request to create a new payer."""
+    name: str = Field(..., description="Payer name")
+    type: str = Field(default="", description="Insurance company type")
+    policies_count: int = Field(default=0)
 
 class Payer(BaseModel):
+    """Response model for payer."""
     id: str
     name: str
-    type: str  # insurance company type
-    policies_count: int
+    type: str = ""
+    policies_count: int = 0
 
 class LoginRequest(BaseModel):
     email: str
@@ -236,13 +268,13 @@ async def get_payer(payer_id: str):
 
 
 @app.post("/payers", tags=["Payers"])
-async def create_payer(payer: Payer):
+async def create_payer(request: PayerCreateRequest):
     """Create a new payer (Admin only)."""
     new_payer = {
         "id": f"p{len(PAYERS_DATA)+1}",
-        "name": payer.name,
-        "type": payer.type,
-        "policies_count": payer.policies_count
+        "name": request.name,
+        "type": request.type,
+        "policies_count": request.policies_count
     }
     PAYERS_DATA.append(new_payer)
     return {"message": "Payer created", "payer": new_payer}
@@ -271,14 +303,14 @@ async def get_drug(drug_id: str):
 
 
 @app.post("/drugs", tags=["Drugs"])
-async def create_drug(drug: Drug):
+async def create_drug(request: DrugCreateRequest):
     """Create a new drug (Admin only)."""
     new_drug = {
         "id": f"d{len(DRUGS_DATA)+1}",
-        "name": drug.name,
-        "drug_class": drug.drug_class,
-        "condition": drug.condition,
-        "generic_available": drug.generic_available
+        "name": request.name,
+        "drug_class": request.drug_class,
+        "condition": request.condition,
+        "generic_available": request.generic_available
     }
     DRUGS_DATA.append(new_drug)
     return {"message": "Drug created", "drug": new_drug}
@@ -307,15 +339,15 @@ async def get_policy(policy_id: str):
 
 
 @app.post("/policies", tags=["Policies"])
-async def create_policy(policy: Policy):
+async def create_policy(request: PolicyCreateRequest):
     """Create a new policy (Admin only)."""
     new_policy = {
         "id": f"pol{len(POLICIES_DATA)+1}",
-        "payer_id": policy.payer_id,
-        "name": policy.name,
-        "description": policy.description,
-        "effective_date": policy.effective_date,
-        "coverage_rules": policy.coverage_rules
+        "payer_id": request.payer_id,
+        "name": request.name,
+        "description": request.description,
+        "effective_date": request.effective_date,
+        "coverage_rules": request.coverage_rules
     }
     POLICIES_DATA.append(new_policy)
     return {"message": "Policy created", "policy": new_policy}
@@ -344,14 +376,14 @@ async def get_user(user_id: str):
 
 
 @app.post("/users", tags=["Users"])
-async def create_user(user: User):
+async def create_user(request: UserCreateRequest):
     """Create a new user."""
     new_user = {
         "id": f"u{len(USERS_DATA)+1}",
-        "email": user.email,
-        "name": user.name,
-        "role": user.role,
-        "specialization": user.specialization
+        "email": request.email,
+        "name": request.name,
+        "role": request.role,
+        "specialization": request.specialization
     }
     USERS_DATA.append(new_user)
     return {"message": "User created", "user": new_user}

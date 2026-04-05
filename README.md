@@ -1,5 +1,4 @@
-# PixelPirates_Anton
-# Polarix — Drug Policy Intelligence Platform
+# PixelPirates_Anton Polarix: Drug Policy Intelligence Platform
 
 > AI-powered ingestion, extraction, and comparison of insurance drug coverage policies for clinicians and payer analysts.
 

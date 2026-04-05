@@ -20,7 +20,6 @@ from uuid import uuid4
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
@@ -153,54 +152,58 @@ app = FastAPI(
 
 
 # ════════════════════════════════════════════════════════════════
-# Security Middleware & Headers (Applied first for outermost layer)
+# Security Middleware & Headers
 # ════════════════════════════════════════════════════════════════
 
-# Class-based Security Headers Middleware
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        
-        # Prevent clickjacking attacks (embedding in frames)
-        response.headers["X-Frame-Options"] = "DENY"
-        
-        # Prevent MIME type sniffing
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        
-        # Enable browser XSS protection
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        
-        # Content Security Policy - restrict resource loading
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'"
-        
-        # Enforce HTTPS (Strict-Transport-Security)
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
-        
-        # Additional security headers
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-        
-        # Disable client-side caching for sensitive data
-        if "/admin" in request.url.path or "/user" in request.url.path:
-            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-        
-        return response
+# Security Headers Middleware - MUST be before CORS so it wraps properly
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add security headers to all HTTP responses."""
+    response = await call_next(request)
+    
+    logger.info(f"Middleware processing {request.url.path}")
+    
+    # Add security headers to the response
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    
+    if "/admin" in request.url.path or "/user" in request.url.path:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    
+    return response
 
 
 # Restricted CORS - Production ready
-allowed_origins = [
-    "http://localhost:3000",      # Local development
-    "http://localhost:3001",      # Local dev alternate
-    "http://127.0.0.1:3000",      # Localhost variant
-]
+# Start with origins from .env ALLOWED_CORS_ORIGINS (comma-separated)
+allowed_origins_str = os.getenv("ALLOWED_CORS_ORIGINS", "")
+allowed_origins = []
 
-# Allow these origins if configured in env
-if os.getenv("FRONTEND_URL"):
-    allowed_origins.append(os.getenv("FRONTEND_URL"))
-if os.getenv("PRODUCTION_URL"):
-    allowed_origins.append(os.getenv("PRODUCTION_URL"))
+# Parse from comma-separated string and remove duplicates
+if allowed_origins_str:
+    allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+else:
+    # Fallback defaults if env var not set
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+# Remove duplicates while preserving order
+seen = set()
+allowed_origins = [x for x in allowed_origins if not (x in seen or seen.add(x))]
+
+logger.info(f"CORS allowed_origins configured: {allowed_origins}")
 
 app.add_middleware(
     CORSMiddleware,

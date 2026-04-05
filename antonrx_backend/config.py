@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     rate_limit_extraction_per_day: int = 100
 
     # ════════════════════════════════════════════════════════════════
+    # CORS Configuration (Security)
+    # ════════════════════════════════════════════════════════════════
+    frontend_url: Optional[str] = None  # Primary frontend URL
+    production_url: Optional[str] = None  # Production domain
+    allowed_cors_origins: Optional[str] = None  # Comma-separated list of allowed origins
+
+    # ════════════════════════════════════════════════════════════════
     # Pydantic Configuration
     # ════════════════════════════════════════════════════════════════
     model_config = SettingsConfigDict(

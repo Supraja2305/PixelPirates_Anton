@@ -16,9 +16,11 @@ load_dotenv(dotenv_path=env_path, override=True)
 from datetime import datetime
 import logging
 from contextlib import asynccontextmanager
+from uuid import uuid4
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
@@ -151,6 +153,66 @@ app = FastAPI(
 
 
 # ════════════════════════════════════════════════════════════════
+# Security Middleware & Headers (Applied first for outermost layer)
+# ════════════════════════════════════════════════════════════════
+
+# Class-based Security Headers Middleware
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Prevent clickjacking attacks (embedding in frames)
+        response.headers["X-Frame-Options"] = "DENY"
+        
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        
+        # Enable browser XSS protection
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        
+        # Content Security Policy - restrict resource loading
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'"
+        
+        # Enforce HTTPS (Strict-Transport-Security)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        
+        # Additional security headers
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        
+        # Disable client-side caching for sensitive data
+        if "/admin" in request.url.path or "/user" in request.url.path:
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        
+        return response
+
+
+# Restricted CORS - Production ready
+allowed_origins = [
+    "http://localhost:3000",      # Local development
+    "http://localhost:3001",      # Local dev alternate
+    "http://127.0.0.1:3000",      # Localhost variant
+]
+
+# Allow these origins if configured in env
+if os.getenv("FRONTEND_URL"):
+    allowed_origins.append(os.getenv("FRONTEND_URL"))
+if os.getenv("PRODUCTION_URL"):
+    allowed_origins.append(os.getenv("PRODUCTION_URL"))
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,  # Restricted to known domains
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Explicit methods only
+    allow_headers=["Authorization", "Content-Type"],  # Restricted headers
+    max_age=3600,  # Cache preflight for 1 hour
+)
+
+
+# ════════════════════════════════════════════════════════════════
 # Exception Handlers
 # ════════════════════════════════════════════════════════════════
 
@@ -174,48 +236,35 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 
 # ════════════════════════════════════════════════════════════════
-# Middleware
-# ════════════════════════════════════════════════════════════════
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ════════════════════════════════════════════════════════════════
 # Sample Data (Demo)
 # ════════════════════════════════════════════════════════════════
 
-# Sample Payers
+# Sample Payers (Using UUID4 for maximum security - unforgeable IDs)
 PAYERS_DATA = [
-    {"id": "p1", "name": "UnitedHealthcare", "type": "PPO", "policies_count": 45},
-    {"id": "p2", "name": "Cigna", "type": "HMO", "policies_count": 32},
-    {"id": "p3", "name": "Aetna", "type": "PPO", "policies_count": 28},
+    {"id": str(uuid4()), "name": "UnitedHealthcare", "type": "PPO", "policies_count": 45},
+    {"id": str(uuid4()), "name": "Cigna", "type": "HMO", "policies_count": 32},
+    {"id": str(uuid4()), "name": "Aetna", "type": "PPO", "policies_count": 28},
 ]
 
-# Sample Drugs
+# Sample Drugs (Using UUID4 for maximum security - unforgeable IDs)
 DRUGS_DATA = [
-    {"id": "d1", "name": "Adalimumab", "drug_class": "TNF Inhibitor", "condition": "Rheumatoid Arthritis", "generic_available": False},
-    {"id": "d2", "name": "Metformin", "drug_class": "Antidiabetic", "condition": "Type 2 Diabetes", "generic_available": True},
-    {"id": "d3", "name": "Lisinopril", "drug_class": "ACE Inhibitor", "condition": "Hypertension", "generic_available": True},
-    {"id": "d4", "name": "Atorvastatin", "drug_class": "Statin", "condition": "High Cholesterol", "generic_available": True},
+    {"id": str(uuid4()), "name": "Adalimumab", "drug_class": "TNF Inhibitor", "condition": "Rheumatoid Arthritis", "generic_available": False},
+    {"id": str(uuid4()), "name": "Metformin", "drug_class": "Antidiabetic", "condition": "Type 2 Diabetes", "generic_available": True},
+    {"id": str(uuid4()), "name": "Lisinopril", "drug_class": "ACE Inhibitor", "condition": "Hypertension", "generic_available": True},
+    {"id": str(uuid4()), "name": "Atorvastatin", "drug_class": "Statin", "condition": "High Cholesterol", "generic_available": True},
 ]
 
-# Sample Policies
+# Sample Policies (Using UUID4 for maximum security - unforgeable IDs)
 POLICIES_DATA = [
-    {"id": "pol1", "payer_id": "p1", "name": "Gold Plan", "description": "Comprehensive coverage", "effective_date": "2024-01-01", "coverage_rules": {"copay": 20}},
-    {"id": "pol2", "payer_id": "p2", "name": "Silver Plan", "description": "Standard coverage", "effective_date": "2024-01-01", "coverage_rules": {"copay": 35}},
+    {"id": str(uuid4()), "payer_id": PAYERS_DATA[0]["id"], "name": "Gold Plan", "description": "Comprehensive coverage", "effective_date": "2024-01-01", "coverage_rules": {"copay": 20}},
+    {"id": str(uuid4()), "payer_id": PAYERS_DATA[1]["id"], "name": "Silver Plan", "description": "Standard coverage", "effective_date": "2024-01-01", "coverage_rules": {"copay": 35}},
 ]
 
-# Sample Users
+# Sample Users (Using UUID4 for maximum security - unforgeable IDs)
 USERS_DATA = [
-    {"id": "u1", "email": "admin@antonrx.com", "name": "Admin User", "role": "admin"},
-    {"id": "u2", "email": "doctor@antonrx.com", "name": "Dr. Smith", "role": "doctor", "specialization": "Cardiology"},
-    {"id": "u3", "email": "user@antonrx.com", "name": "Regular User", "role": "user"},
+    {"id": str(uuid4()), "email": "admin@antonrx.com", "name": "Admin User", "role": "admin"},
+    {"id": str(uuid4()), "email": "doctor@antonrx.com", "name": "Dr. Smith", "role": "doctor", "specialization": "Cardiology"},
+    {"id": str(uuid4()), "email": "user@antonrx.com", "name": "Regular User", "role": "user"},
 ]
 
 # ════════════════════════════════════════════════════════════════
@@ -271,7 +320,7 @@ async def get_payer(payer_id: str):
 async def create_payer(request: PayerCreateRequest):
     """Create a new payer (Admin only)."""
     new_payer = {
-        "id": f"p{len(PAYERS_DATA)+1}",
+        "id": str(uuid4()),  # UUID4 - cryptographically secure, unforgeable
         "name": request.name,
         "type": request.type,
         "policies_count": request.policies_count
@@ -306,7 +355,7 @@ async def get_drug(drug_id: str):
 async def create_drug(request: DrugCreateRequest):
     """Create a new drug (Admin only)."""
     new_drug = {
-        "id": f"d{len(DRUGS_DATA)+1}",
+        "id": str(uuid4()),  # UUID4 - cryptographically secure, unforgeable
         "name": request.name,
         "drug_class": request.drug_class,
         "condition": request.condition,
@@ -342,7 +391,7 @@ async def get_policy(policy_id: str):
 async def create_policy(request: PolicyCreateRequest):
     """Create a new policy (Admin only)."""
     new_policy = {
-        "id": f"pol{len(POLICIES_DATA)+1}",
+        "id": str(uuid4()),  # UUID4 - cryptographically secure, unforgeable
         "payer_id": request.payer_id,
         "name": request.name,
         "description": request.description,
@@ -379,7 +428,7 @@ async def get_user(user_id: str):
 async def create_user(request: UserCreateRequest):
     """Create a new user."""
     new_user = {
-        "id": f"u{len(USERS_DATA)+1}",
+        "id": str(uuid4()),  # UUID4 - cryptographically secure, unforgeable
         "email": request.email,
         "name": request.name,
         "role": request.role,

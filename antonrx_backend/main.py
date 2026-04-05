@@ -161,13 +161,30 @@ async def add_security_headers(request: Request, call_next):
     """Add security headers to all HTTP responses."""
     response = await call_next(request)
     
-    logger.info(f"Middleware processing {request.url.path}")
-    
     # Add security headers to the response
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'"
+    
+    # Skip strict CSP for documentation endpoints
+    if request.url.path not in ["/docs", "/redoc", "/openapi.json"]:
+        # CSP for API endpoints
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:;"
+        )
+    else:
+        # Permissive CSP for Swagger UI / ReDoc (documentation)
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self' https://cdn.jsdelivr.net https://unpkg.com; "
+            "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "font-src 'self' https://cdn.jsdelivr.net data:"
+        )
+    
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
